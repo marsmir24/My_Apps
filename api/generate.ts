@@ -3,14 +3,27 @@ import { GoogleGenerativeAI } from "@google/generativeai";
 export const config = { runtime: "edge" };
 
 export default async function handler(req: Request) {
-  const { prompt } = await req.json();
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  try {
+    const { prompt, modelName, generationConfig } = await req.json();
+    
+    // Берем ключ из настроек Vercel
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+    
+    // Используем модель, которую прислал фронтенд (или стандартную)
+    const model = genAI.getGenerativeModel({ model: modelName || "gemini-1.5-flash" });
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  
-  return new Response(JSON.stringify({ text: response.text() }), {
-    headers: { "Content-Type": "application/json" },
-  });
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig,
+    });
+
+    const response = await result.response;
+    
+    // Возвращаем результат фронтенду
+    return new Response(JSON.stringify(response), {
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error: any) {
+    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+  }
 }
