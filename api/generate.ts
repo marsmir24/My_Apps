@@ -1,6 +1,6 @@
-import { GoogleGenerativeAI } from "@google/generativeai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-export const config = { runtime: "edge" };
+export const config = { runtime: "nodejs" };
 
 export default async function handler(req: Request) {
   try {
