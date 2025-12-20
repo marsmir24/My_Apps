@@ -1,53 +1,65 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
 import { UserFilters, Recipe, Temperature, IngredientCorrection } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Вспомогательная функция для общения с нашим сервером
+async function callGeminiAPI(payload: any) {
+  const response = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || "Ошибка API");
+  }
+
+  return await response.json();
+}
 
 const recipeSchema = {
-  type: Type.ARRAY,
+  type: "array",
   items: {
-    type: Type.OBJECT,
+    type: "object",
     properties: {
-      title: { type: Type.STRING, description: 'Название блюда' },
-      description: { type: Type.STRING, description: 'Краткое описание блюда' },
-      cookingTimeMinutes: { type: Type.INTEGER, description: 'Время приготовления в минутах' },
+      title: { type: "string", description: 'Название блюда' },
+      description: { type: "string", description: 'Краткое описание блюда' },
+      cookingTimeMinutes: { type: "integer", description: 'Время приготовления в минутах' },
       instructions: { 
-        type: Type.ARRAY, 
-        items: { type: Type.STRING },
+        type: "array", 
+        items: { type: "string" },
         description: 'Пошаговая инструкция'
       },
       ingredients: {
-        type: Type.ARRAY,
+        type: "array",
         items: {
-          type: Type.OBJECT,
+          type: "object",
           properties: {
-            name: { type: Type.STRING, description: 'Название ингредиента' },
-            amount: { type: Type.STRING, description: 'Количество' },
-            isAvailable: { type: Type.BOOLEAN, description: 'true если ингредиент есть в наличии у пользователя, false если его нужно докупить' }
+            name: { type: "string", description: 'Название ингредиента' },
+            amount: { type: "string", description: 'Количество' },
+            isAvailable: { type: "boolean", description: 'true если ингредиент есть в наличии' }
           },
           required: ['name', 'amount', 'isAvailable']
         }
       },
-      isVegan: { type: Type.BOOLEAN },
-      isKosher: { type: Type.BOOLEAN },
-      temperature: { type: Type.STRING, description: 'warm, cold' }
+      isVegan: { type: "boolean" },
+      isKosher: { type: "boolean" },
+      temperature: { type: "string", description: 'warm, cold' }
     },
     required: ['title', 'description', 'cookingTimeMinutes', 'instructions', 'ingredients', 'isVegan', 'isKosher', 'temperature']
   }
 };
 
 const validationSchema = {
-  type: Type.OBJECT,
+  type: "object",
   properties: {
     corrections: {
-      type: Type.ARRAY,
+      type: "array",
       items: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          original: { type: Type.STRING },
-          suggested: { type: Type.STRING },
-          reason: { type: Type.STRING }
+          original: { type: "string" },
+          suggested: { type: "string" },
+          reason: { type: "string" }
         },
         required: ['original', 'suggested', 'reason']
       }
@@ -57,21 +69,20 @@ const validationSchema = {
 };
 
 export async function validateIngredients(list: string[]): Promise<IngredientCorrection[]> {
-  const prompt = `Проверь следующий список ингредиентов на наличие опечаток, несуществующих продуктов или странных названий: ${list.join(", ")}. 
-  Если продукт написан неправильно (например 'лык' вместо 'лук') или это не съедобный продукт, предложи исправление. 
-  Верни список исправлений в формате JSON. Если всё верно, верни пустой массив corrections.`;
-
+  const prompt = `Проверь ингредиенты на ошибки: ${list.join(", ")}. Верни JSON.`;
+  
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
+    const data = await callGeminiAPI({
+      prompt,
+      modelName: "gemini-1.5-flash",
+      generationConfig: {
         responseMimeType: "application/json",
         responseSchema: validationSchema,
-      },
+      }
     });
-    const data = JSON.parse(response.text);
-    return data.corrections || [];
+    
+    const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+    return parsed.corrections || [];
   } catch (error) {
     console.error("Validation error:", error);
     return [];
@@ -79,33 +90,21 @@ export async function validateIngredients(list: string[]): Promise<IngredientCor
 }
 
 export async function generateRecipes(filters: UserFilters): Promise<Recipe[]> {
-  const prompt = `Сгенерируй ровно ${filters.recipeCount} уникальных рецептов на основе следующих данных:
-  Имеющиеся продукты: ${filters.availableIngredients.join(", ")}
-  Исключить ингредиенты: ${filters.excludedIngredients.join(", ")}
-  Максимальное время: ${filters.maxCookingTime} минут
-  Предпочтение по температуре: ${filters.temperature}
-  Веганское: ${filters.isVegan}
-  Кошерное: ${filters.isKosher}
-  
-  Для каждого ингредиента в рецепте ОБЯЗАТЕЛЬНО проверь, входит ли он в список "Имеющиеся продукты". 
-  Если входит - isAvailable: true. 
-  Если отсутствует - isAvailable: false (даже если это соль или вода, если их нет в списке имеющихся - ставь false).
-  
-  Результат должен быть на русском языке.`;
+  const prompt = `Сгенерируй ${filters.recipeCount} рецептов. Продукты: ${filters.availableIngredients.join(", ")}. Результат на русском.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
+    const data = await callGeminiAPI({
+      prompt,
+      modelName: "gemini-1.5-flash",
+      generationConfig: {
         responseMimeType: "application/json",
         responseSchema: recipeSchema,
-      },
+      }
     });
 
-    const results = JSON.parse(response.text) as any[];
+    const results = JSON.parse(data.candidates[0].content.parts[0].text);
     
-    return results.map((r, index) => ({
+    return results.map((r: any, index: number) => ({
       ...r,
       id: `recipe-${index}-${Date.now()}`,
       temperature: r.temperature as Temperature
@@ -118,24 +117,15 @@ export async function generateRecipes(filters: UserFilters): Promise<Recipe[]> {
 
 export async function generateRecipeImage(recipe: Recipe): Promise<string> {
   try {
-    const ingredientsText = recipe.ingredients.map(i => i.name).join(", ");
-    const prompt = `Professional food photography of "${recipe.title}". 
-    The dish consists of: ${ingredientsText}. 
-    Style: High-end restaurant plating, close-up, soft natural lighting, appetizing, macro photography. 
-    Ensure the image accurately represents the specific ingredients listed. No people in frame.`;
+    const prompt = `Professional food photography of "${recipe.title}". High-end restaurant plating.`;
 
-    const aiImg = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-    const response = await aiImg.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{ text: prompt }],
-      },
-      config: {
-        imageConfig: { aspectRatio: "4:3" }
-      }
+    const data = await callGeminiAPI({
+      prompt,
+      modelName: "gemini-1.5-flash", // Используем доступную модель для генерации
     });
 
-    for (const part of response.candidates[0].content.parts) {
+    // Если модель вернула картинку в inlineData
+    for (const part of data.candidates[0].content.parts) {
       if (part.inlineData) {
         return `data:image/png;base64,${part.inlineData.data}`;
       }
